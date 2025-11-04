@@ -3,16 +3,35 @@ pages_build_output_dir = "."  # Root dir for static files
 compatibility_date = "2025-10-13"
 compatibility_flags = ["nodejs_compat"]  # Enables Stripe deps
 
-# Env vars (use dashboard for secrets like STRIPE_KEY)
+# Runtime vars (non-sensitive). Use `wrangler secret put` for secrets.
 [vars]
+# Example non-secret vars (optional):
+# API_BASE = "https://tourmalinetech.com"
+# FRONTEND_ENV = "production"
 
-# Optional KV for stock caching (create/bind in dashboard > KV)
+# ---------- EXISTING BINDINGS ----------
+# Optional KV for stock caching (leave as-is)
 [[kv_namespaces]]
 binding = "STOCK_CACHE"
 id = "your-kv-id-here"  # Replace after creating
+# preview_id = "your-preview-kv-id-here"  # (recommended) add if you have a preview namespace
 
 # Optional D1 DB for orders
 # [[d1_databases]]
 # binding = "DB"
 # database_name = "tourmaline-orders"
 # database_id = "your-d1-id"
+
+# ---------- NEW: PRODUCT CATALOG KV (backing /api/products) ----------
+# Bind your existing KV namespace (named TOURMALINETECH) to the binding "PRODUCTS"
+[[kv_namespaces]]
+binding = "PRODUCTS"              # <-- used by _worker.js (env.PRODUCTS)
+id = "REPLACE_WITH_PROD_KV_ID"    # <-- the ID of your TOURMALINETECH KV namespace (production)
+preview_id = "REPLACE_WITH_PREVIEW_KV_ID"  # <-- the preview namespace ID (recommended)
+
+# ---------- SECRETS TO SET (do NOT put real values here) ----------
+# Run these once (or via dashboard):
+#   wrangler secret put ADMIN_TOKEN
+#   wrangler secret put STRIPE_SECRET_KEY
+# Optionally, if you use webhooks:
+#   wrangler secret put STRIPE_WEBHOOK_SECRET

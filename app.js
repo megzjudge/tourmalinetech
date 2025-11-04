@@ -21,10 +21,8 @@ if (themeToggle) {
 }
 
 /* =====================================
-   🛒 Cart Management
+   🔔 Toast helper
    ===================================== */
-let cart = JSON.parse(localStorage.getItem("cart")) || [];
-
 function showToast(message) {
   let toast = document.createElement("div");
   toast.className = "toast";
@@ -36,6 +34,129 @@ function showToast(message) {
     setTimeout(() => toast.remove(), 300);
   }, 2200);
 }
+
+/* =====================================
+   📦 Products from CSV (dynamic grid)
+   ===================================== */
+// Put your CSV where your site can fetch it, e.g. /data/products.csv
+// If you keep a different name/path, update PRODUCT_CSV_URL.
+const PRODUCT_CSV_URL = "/data/products.csv";
+const FALLBACK_IMG = "https://placehold.co/300x200?text=Image";
+let SITE_CURRENCY = "AUD"; // Will auto-sync from first CSV row if present
+
+function money(amount, currency = SITE_CURRENCY) {
+  const lc = (currency || "AUD").toUpperCase();
+  const locale = lc === "AUD" ? "en-AU" : "en-US";
+  try {
+    return new Intl.NumberFormat(locale, { style: "currency", currency: lc }).format(Number(amount));
+  } catch {
+    // Safe fallback
+    return `$${Number(amount).toFixed(2)}`;
+  }
+}
+
+// Split a CSV line while respecting quotes
+function splitCSVLine(line) {
+  // splits on commas not inside quotes
+  const parts = line.split(/,(?=(?:[^"]*"[^"]*")*[^"]*$)/g);
+  return parts.map((s) => {
+    let v = s.trim();
+    if (v.startsWith('"') && v.endsWith('"')) v = v.slice(1, -1).replace(/""/g, '"');
+    return v;
+  });
+}
+
+async function fetchCSV(url) {
+  const res = await fetch(url, { cache: "no-store" });
+  if (!res.ok) throw new Error(`Failed to load CSV: ${res.status} ${res.statusText}`);
+  return await res.text();
+}
+
+function parseCSV(text) {
+  const lines = text.split(/\r?\n/).filter((l) => l.trim().length > 0);
+  if (!lines.length) return [];
+  const headers = splitCSVLine(lines[0]);
+  return lines.slice(1).map((line) => {
+    const cells = splitCSVLine(line);
+    const row = {};
+    headers.forEach((h, i) => (row[h] = cells[i] ?? ""));
+    return row;
+  });
+}
+
+function firstImageFromCell(cell = "") {
+  // supports comma/semicolon/pipe/whitespace separated lists
+  const candidates = cell.split(/[|,;\s]+/).map((s) => s.trim()).filter(Boolean);
+  const url = candidates.find((u) => /^https?:\/\//i.test(u));
+  return url || FALLBACK_IMG;
+}
+
+function rowToProduct(row) {
+  const get = (k) => row[k] ?? row[k.toLowerCase()] ?? row[k.toUpperCase()];
+  const title = get("Title") || "Untitled Product";
+  const sku = get("SKU") || title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "");
+  const price = parseFloat(get("Price")) || 0;
+  const currency = (get("Currency") || SITE_CURRENCY || "AUD").toUpperCase();
+  const image = firstImageFromCell(get("Images") || "");
+  const description = get("Description") || "";
+  const brand = get("Brand") || "";
+
+  return { id: sku, name: title, price, currency, image, description, brand };
+}
+
+function productCardHTML(p) {
+  return `
+    <article class="product-card">
+      <img src="${p.image}" alt="${p.name}" loading="lazy"
+           onerror="this.onerror=null; this.src='${FALLBACK_IMG}';">
+      <h3>${p.name}</h3>
+      <p>${p.description || ""}</p>
+      <div class="price">${money(p.price, p.currency)}</div>
+      <button class="add-to-cart">Add to Cart</button>
+    </article>
+  `;
+}
+
+function renderProducts(products) {
+  const grid = document.getElementById("products-grid") || document.querySelector(".products-grid");
+  if (!grid) return;
+
+  grid.innerHTML = products.map(productCardHTML).join("");
+
+  // attach handlers for the newly rendered cards
+  const cards = grid.querySelectorAll(".product-card");
+  cards.forEach((card, idx) => {
+    const btn = card.querySelector(".add-to-cart");
+    btn?.addEventListener("click", () => addToCart(products[idx]));
+  });
+}
+
+async function loadProductsFromCSV() {
+  try {
+    const csv = await fetchCSV(PRODUCT_CSV_URL);
+    const rows = parseCSV(csv);
+
+    const products = rows.map(rowToProduct).filter((p) => p.name && p.price >= 0);
+
+    // adopt currency from first product if present
+    if (products[0]?.currency) SITE_CURRENCY = products[0].currency.toUpperCase();
+
+    renderProducts(products);
+  } catch (err) {
+    console.error(err);
+    const grid = document.getElementById("products-grid") || document.querySelector(".products-grid");
+    if (grid) {
+      grid.innerHTML = `<div class="error" style="padding:12px;border:1px solid var(--border,#ddd);border-radius:8px">
+        Could not load products. Please check <code>${PRODUCT_CSV_URL}</code>.
+      </div>`;
+    }
+  }
+}
+
+/* =====================================
+   🛒 Cart Management
+   ===================================== */
+let cart = JSON.parse(localStorage.getItem("cart")) || [];
 
 function updateCartUI() {
   const cartItemsEl = document.getElementById("cart-items");
@@ -59,7 +180,7 @@ function updateCartUI() {
       itemEl.innerHTML = `
         <img src="${item.image}" alt="${item.name}" style="width: 50px; height: 50px; object-fit: cover; border-radius: 6px;"
              onerror="this.onerror=null; this.src='https://placehold.co/50x50?text=Img';">
-        <span>${item.name} (Qty: ${item.quantity}) - $${(item.price * item.quantity).toFixed(2)}</span>
+        <span>${item.name} (Qty: ${item.quantity}) - ${money(item.price * item.quantity)}</span>
         <button type="button" onclick="removeFromCart(${index})">Remove</button>
       `;
       cartItemsEl.appendChild(itemEl);
@@ -72,7 +193,7 @@ function updateCartUI() {
     const cartCountEl = document.getElementById("cart-count");
     if (cartTotalEl) cartTotalEl.style.display = "block";
     if (emptyCartEl) emptyCartEl.style.display = "none";
-    if (totalAmountEl) totalAmountEl.textContent = total.toFixed(2);
+    if (totalAmountEl) totalAmountEl.textContent = money(total);
     if (cartCountEl) cartCountEl.textContent = cart.reduce((sum, item) => sum + item.quantity, 0);
   }
 }
@@ -93,18 +214,18 @@ function updateSummary() {
       ${cart.map((item) => `
         <div class="cart-item">
           <span>${item.name} (x${item.quantity})</span>
-          <span>$${(item.price * item.quantity).toFixed(2)}</span>
+          <span>${money(item.price * item.quantity)}</span>
         </div>
       `).join("")}
       <div style="font-weight: bold; text-align: right; border-top: 1px solid var(--border); padding-top: 10px;">
-        Total: $${total.toFixed(2)}
+        Total: ${money(total)}
       </div>
     `;
     const submitBtn = document.getElementById("submit");
     if (submitBtn) {
       submitBtn.disabled = false;
       const defaultSpan = submitBtn.querySelector(".default");
-      if (defaultSpan) defaultSpan.textContent = `Pay $${total.toFixed(2)}`;
+      if (defaultSpan) defaultSpan.textContent = `Pay ${money(total)}`;
     }
   }
 }
@@ -121,7 +242,7 @@ function populateOrderSummary() {
   let total = 0;
   if (cart.length === 0) {
     orderContainer.innerHTML = "<p>Your cart is empty.</p>";
-    if (totalAmountEl) totalAmountEl.textContent = "$0.00";
+    if (totalAmountEl) totalAmountEl.textContent = money(0);
     updateCheckoutButton(0);
     return 0;
   }
@@ -138,12 +259,12 @@ function populateOrderSummary() {
         Size: ${item.size || "Standard"}<br>
         Qty: ${item.quantity}</p>
       </div>
-      <span>$${(item.price * item.quantity).toFixed(2)}</span>
+      <span>${money(item.price * item.quantity)}</span>
     `;
     orderContainer.appendChild(el);
   });
 
-  if (totalAmountEl) totalAmountEl.textContent = `$${total.toFixed(2)}`;
+  if (totalAmountEl) totalAmountEl.textContent = money(total);
   updateCheckoutButton(total);
   return total;
 }
@@ -159,7 +280,16 @@ const COUPONS = {
   "FREESHIP": { type: "shipping", value: 1 }
 };
 
-function dollars(cents) { return `$${(cents / 100).toFixed(2)}`; }
+// currency-aware cents → string
+function dollars(cents) {
+  const currency = (SITE_CURRENCY || "AUD").toUpperCase();
+  const locale = currency === "AUD" ? "en-AU" : "en-US";
+  try {
+    return new Intl.NumberFormat(locale, { style: "currency", currency }).format(cents / 100);
+  } catch {
+    return `$${(cents / 100).toFixed(2)}`;
+  }
+}
 function toCents(v) { return Math.round(Number(v) * 100); }
 
 function currentSelections() {
@@ -213,7 +343,7 @@ function updatePricingUI() {
       discAmt.textContent = `-${dollars(totals.discountCents)}`;
     } else {
       discRow.style.display = "none";
-      discAmt.textContent = "-$0.00";
+      discAmt.textContent = `-${dollars(0)}`;
     }
   }
   if (shipAmt) shipAmt.textContent = dollars(totals.shippingCents);
@@ -250,7 +380,7 @@ function updateCheckoutButton(total) {
   const submitBtn = document.getElementById("submit");
   if (submitBtn) {
     const defaultSpan = submitBtn.querySelector(".default");
-    if (defaultSpan) defaultSpan.textContent = `Pay $${Number(total).toFixed(2)}`;
+    if (defaultSpan) defaultSpan.textContent = `Pay ${money(Number(total))}`;
     submitBtn.disabled = total === 0;
   }
 }
@@ -263,7 +393,8 @@ function addToCart(productData) {
   if (existingItem) {
     existingItem.quantity += 1;
   } else {
-    cart.push({ ...productData, quantity: 1 });
+    // ensure currency is attached to items from CSV
+    cart.push({ ...productData, quantity: 1, currency: productData.currency || SITE_CURRENCY });
   }
   localStorage.setItem("cart", JSON.stringify(cart));
   updateCartUI();
@@ -372,14 +503,18 @@ function getBillingFromForm() {
    💳 Stripe Checkout Logic (with dynamic totals & PI refresh)
    ===================================== */
 document.addEventListener("DOMContentLoaded", () => {
+  // Load products from CSV for pages with a grid
+  loadProductsFromCSV();
+
   // Cart page handling (index/products)
   const addToCartBtns = document.querySelectorAll(".add-to-cart");
   if (addToCartBtns.length > 0) {
     addToCartBtns.forEach((btn) => {
       btn.addEventListener("click", () => {
         const productCard = btn.closest(".product-card");
-        const productData = productCard ? JSON.parse(productCard.dataset.product) : null;
-        if (productData) addToCart(productData);
+        const productData = productCard ? JSON.parse(productCard.dataset.product || "{}") : null;
+        // If the card is CSV-rendered, productData may be null — we already bind handlers in renderProducts().
+        if (productData && Object.keys(productData).length) addToCart(productData);
       });
     });
 
@@ -421,7 +556,7 @@ document.addEventListener("DOMContentLoaded", () => {
       }
 
       try {
-        orderButton.disabled = true;
+        if (orderButton) orderButton.disabled = true;
         if (defaultSpan) defaultSpan.textContent = "Preparing payment...";
 
         const email = document.getElementById("email")?.value.trim();
@@ -429,7 +564,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
         const data = await postJSON(CREATE_PI_URL, {
           amount: desiredAmountCents,
-          currency: "usd",
+          currency: (SITE_CURRENCY || "AUD").toLowerCase(), // CSV-driven currency
           items: cart,
           email,
           shipping
@@ -447,8 +582,8 @@ document.addEventListener("DOMContentLoaded", () => {
         paymentElement = elements.create("payment", { layout: "tabs" });
         paymentElement.mount("#payment-element");
 
-        orderButton.disabled = false;
-        if (defaultSpan) defaultSpan.textContent = `Pay $${(desiredAmountCents / 100).toFixed(2)}`;
+        if (orderButton) orderButton.disabled = false;
+        if (defaultSpan) defaultSpan.textContent = `Pay ${money(desiredAmountCents / 100)}`;
       } catch (err) {
         console.error("init/refresh error:", err);
         const result = document.getElementById("payment-result");
@@ -480,11 +615,13 @@ document.addEventListener("DOMContentLoaded", () => {
     });
 
     document.getElementById("billing-same")?.addEventListener("change", (e) => {
-      document.getElementById("billing-fields").style.display = e.target.checked ? "none" : "block";
+      const target = document.getElementById("billing-fields");
+      if (target) target.style.display = e.target.checked ? "none" : "block";
     });
 
     document.getElementById("is-gift")?.addEventListener("change", (e) => {
-      document.getElementById("gift-message-row").style.display = e.target.checked ? "block" : "none";
+      const target = document.getElementById("gift-message-row");
+      if (target) target.style.display = e.target.checked ? "block" : "none";
     });
 
     // Shipping method radios
@@ -567,7 +704,7 @@ document.addEventListener("DOMContentLoaded", () => {
         } catch (error) {
           if (defaultSpan) {
             const totals = computeTotals(cart, currentSelections());
-            defaultSpan.textContent = `Pay $${(totals.totalCents / 100).toFixed(2)}`;
+            defaultSpan.textContent = `Pay ${money(totals.totalCents / 100)}`;
           }
           orderButton.disabled = false;
           const result = document.getElementById("payment-result");
